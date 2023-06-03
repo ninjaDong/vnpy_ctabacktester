@@ -15,7 +15,6 @@ from vnpy.trader.engine import BaseEngine, MainEngine
 from vnpy.trader.constant import Interval
 from vnpy.trader.utility import extract_vt_symbol
 from vnpy.trader.object import HistoryRequest, TickData, ContractData, BarData
-from vnpy.trader.datafeed import BaseDatafeed, get_datafeed
 from vnpy.trader.database import BaseDatabase, get_database
 
 import vnpy_ctastrategy
@@ -47,7 +46,6 @@ class BacktesterEngine(BaseEngine):
         self.backtesting_engine: BacktestingEngine = None
         self.thread: Thread = None
 
-        self.datafeed: BaseDatafeed = get_datafeed()
         self.database: BaseDatabase = get_database()
 
         # Backtesting reuslt
@@ -67,16 +65,6 @@ class BacktesterEngine(BaseEngine):
 
         self.load_strategy_class()
         self.write_log("策略文件加载完成")
-
-        self.init_datafeed()
-
-    def init_datafeed(self) -> None:
-        """
-        Init datafeed client.
-        """
-        result: bool = self.datafeed.init(self.write_log)
-        if result:
-            self.write_log("数据服务初始化成功")
 
     def write_log(self, msg: str) -> None:
         """"""
@@ -150,6 +138,7 @@ class BacktesterEngine(BaseEngine):
         size: int,
         pricetick: float,
         capital: int,
+        inverse: bool,
         setting: dict
     ) -> None:
         """"""
@@ -174,6 +163,7 @@ class BacktesterEngine(BaseEngine):
             size=size,
             pricetick=pricetick,
             capital=capital,
+            inverse=inverse,
             mode=mode
         )
 
@@ -216,6 +206,7 @@ class BacktesterEngine(BaseEngine):
         size: int,
         pricetick: float,
         capital: int,
+        inverse: bool,
         setting: dict
     ) -> bool:
         if self.thread:
@@ -236,6 +227,7 @@ class BacktesterEngine(BaseEngine):
                 size,
                 pricetick,
                 capital,
+                inverse,
                 setting
             )
         )
@@ -272,6 +264,7 @@ class BacktesterEngine(BaseEngine):
         size: int,
         pricetick: float,
         capital: int,
+        inverse: bool,
         optimization_setting: OptimizationSetting,
         use_ga: bool,
         max_workers: int
@@ -297,6 +290,7 @@ class BacktesterEngine(BaseEngine):
             size=size,
             pricetick=pricetick,
             capital=capital,
+            inverse=inverse,
             mode=mode
         )
 
@@ -343,6 +337,7 @@ class BacktesterEngine(BaseEngine):
         size: int,
         pricetick: float,
         capital: int,
+        inverse: bool,
         optimization_setting: OptimizationSetting,
         use_ga: bool,
         max_workers: int
@@ -365,6 +360,7 @@ class BacktesterEngine(BaseEngine):
                 size,
                 pricetick,
                 capital,
+                inverse,
                 optimization_setting,
                 use_ga,
                 max_workers
@@ -403,7 +399,7 @@ class BacktesterEngine(BaseEngine):
 
         try:
             if interval == "tick":
-                data: List[TickData] = self.datafeed.query_tick_history(req, self.write_log)
+                pass
             else:
                 contract: Optional[ContractData] = self.main_engine.get_contract(vt_symbol)
 
@@ -412,9 +408,6 @@ class BacktesterEngine(BaseEngine):
                     data: List[BarData] = self.main_engine.query_history(
                         req, contract.gateway_name
                     )
-                # Otherwise use RQData to query data
-                else:
-                    data: List[BarData] = self.datafeed.query_bar_history(req, self.write_log)
 
             if data:
                 if interval == "tick":
