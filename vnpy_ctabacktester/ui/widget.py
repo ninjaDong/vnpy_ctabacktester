@@ -90,15 +90,19 @@ class BacktesterManager(QtWidgets.QWidget):
                 start_dt.day
             )
         )
+        self.start_date_edit.setCalendarPopup(True)
         self.end_date_edit: QtWidgets.QDateEdit = QtWidgets.QDateEdit(
             QtCore.QDate.currentDate()
         )
-
+        self.end_date_edit.setCalendarPopup(True)
         self.rate_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit("0.000025")
         self.slippage_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit("0.2")
         self.size_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit("300")
         self.pricetick_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit("0.2")
         self.capital_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit("1000000")
+
+        self.inverse_combo = QtWidgets.QComboBox()
+        self.inverse_combo.addItems(["正向", "反向"])
 
         backtesting_button: QtWidgets.QPushButton = QtWidgets.QPushButton("开始回测")
         backtesting_button.clicked.connect(self.start_backtesting)
@@ -160,6 +164,7 @@ class BacktesterManager(QtWidgets.QWidget):
         form.addRow("合约乘数", self.size_line)
         form.addRow("价格跳动", self.pricetick_line)
         form.addRow("回测资金", self.capital_line)
+        form.addRow("合约模式", self.inverse_combo)
 
         result_grid: QtWidgets.QGridLayout = QtWidgets.QGridLayout()
         result_grid.addWidget(self.trade_button, 0, 0)
@@ -261,6 +266,11 @@ class BacktesterManager(QtWidgets.QWidget):
         self.pricetick_line.setText(str(setting["pricetick"]))
         self.capital_line.setText(str(setting["capital"]))
 
+        if not setting["inverse"]:
+            self.inverse_combo.setCurrentIndex(0)
+        else:
+            self.inverse_combo.setCurrentIndex(1)
+
     def register_event(self) -> None:
         """"""
         self.signal_log.connect(self.process_log_event)
@@ -325,6 +335,11 @@ class BacktesterManager(QtWidgets.QWidget):
         pricetick: float = float(self.pricetick_line.text())
         capital: float = float(self.capital_line.text())
 
+        if self.inverse_combo.currentText() == "正向":
+            inverse = False
+        else:
+            inverse = True
+
         # Check validity of vt_symbol
         if "." not in vt_symbol:
             self.write_log("本地代码缺失交易所后缀，请检查")
@@ -345,7 +360,8 @@ class BacktesterManager(QtWidgets.QWidget):
             "slippage": slippage,
             "size": size,
             "pricetick": pricetick,
-            "capital": capital
+            "capital": capital,
+            "inverse": inverse
         }
         save_json(self.setting_filename, backtesting_setting)
 
@@ -370,6 +386,7 @@ class BacktesterManager(QtWidgets.QWidget):
             size,
             pricetick,
             capital,
+            inverse,
             new_setting
         )
 
@@ -400,6 +417,11 @@ class BacktesterManager(QtWidgets.QWidget):
         pricetick: float = float(self.pricetick_line.text())
         capital: float = float(self.capital_line.text())
 
+        if self.inverse_combo.currentText() == "正向":
+            inverse = False
+        else:
+            inverse = True
+
         parameters: dict = self.settings[class_name]
         dialog: OptimizationSettingEditor = OptimizationSettingEditor(class_name, parameters)
         i: int = dialog.exec()
@@ -420,6 +442,7 @@ class BacktesterManager(QtWidgets.QWidget):
             size,
             pricetick,
             capital,
+            inverse,
             optimization_setting,
             use_ga,
             max_workers
@@ -494,12 +517,35 @@ class BacktesterManager(QtWidgets.QWidget):
 
     def show_candle_chart(self) -> None:
         """"""
-        if not self.candle_dialog.is_updated():
-            history: list = self.backtester_engine.get_history_data()
-            self.candle_dialog.update_history(history)
+        dialog = CandleChartSetDialog(self.start_date_edit.date().toPyDate(),self.end_date_edit.date().toPyDate())
 
-            trades: List[TradeData] = self.backtester_engine.get_all_trades()
-            self.candle_dialog.update_trades(trades)
+        i = dialog.exec()
+        if i != dialog.Accepted:
+            return
+
+        new_setting = dialog.get_setting()
+        start = new_setting["start"]
+        end = new_setting["end"]
+        window = new_setting["window"]
+        interval = new_setting["interval"]
+
+        self.candle_dialog.clear_data()
+
+        if not self.candle_dialog.is_updated():
+            history = self.backtester_engine.get_history_data()
+            candle_list = []
+            for bar in history:
+                if bar.datetime.date() >= start and bar.datetime.date() <= end:
+                    candle_list.append(bar)
+            candle_list = generate_window_bar(candle_list,window,interval)
+            self.candle_dialog.update_history(candle_list)
+
+            trades = self.backtester_engine.get_all_trades()
+            trade_list=[]
+            for trade in trades:
+                if trade.datetime.date()>=start and trade.datetime.date() <= end:
+                    trade_list.append(trade)
+            self.candle_dialog.update_trades(trade_list,window,interval)
 
         self.candle_dialog.exec_()
 
@@ -706,6 +752,90 @@ class BacktestingSettingEditor(QtWidgets.QDialog):
 
         return setting
 
+class CandleChartSetDialog(QtWidgets.QDialog):
+    """
+       For creating
+       """
+
+    def __init__(
+            self, start:datetime, end:datetime= datetime.now(),
+            window: int = 15,interval: Interval = Interval.MINUTE
+    ):
+        """"""
+        super(CandleChartSetDialog, self).__init__()
+
+        self.start = start
+        self.end = end
+        self.window = window
+        self.interval = interval
+
+        self.init_ui()
+
+    def init_ui(self):
+        """"""
+        form = QtWidgets.QFormLayout()
+
+        # Add vt_symbol and name edit if add new strategy
+        self.setWindowTitle("K线周期选择")
+        button_text = "确定"
+
+        self.start_date_edit = QtWidgets.QDateEdit(
+            QtCore.QDate(
+                self.start.year,
+                self.start.month,
+                self.start.day
+            )
+        )
+        self.start_date_edit.setCalendarPopup(True)
+        self.end_date_edit = QtWidgets.QDateEdit(
+            QtCore.QDate(
+                self.end.year,
+                self.end.month,
+                self.end.day
+            )
+        )
+        self.end_date_edit.setCalendarPopup(True)
+
+        self.interval_combo = QtWidgets.QComboBox()
+        for interval in Interval:
+            if interval != Interval.TICK:
+                self.interval_combo.addItem(interval.value)
+
+        self.interval_combo.setCurrentIndex(
+            self.interval_combo.findText(self.interval.value)
+        )
+
+        self.window_line = QtWidgets.QLineEdit()
+        self.window_line.setText(str(self.window))
+
+        form.addRow("开始日期",self.start_date_edit)
+        form.addRow("结束日期",self.end_date_edit)
+        form.addRow("K线周期",self.window_line)
+        form.addRow("K线周期",self.interval_combo)
+
+        button = QtWidgets.QPushButton(button_text)
+        button.clicked.connect(self.accept)
+        form.addRow(button)
+
+        widget = QtWidgets.QWidget()
+        widget.setLayout(form)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(widget)
+
+        vbox = QtWidgets.QVBoxLayout()
+        vbox.addWidget(scroll)
+        self.setLayout(vbox)
+
+    def get_setting(self):
+        """"""
+        setting = {}
+        setting["start"] = self.start_date_edit.date().toPyDate()
+        setting["end"] = self.end_date_edit.date().toPyDate()
+        setting["window"] = int(self.window_line.text())
+        setting["interval"] = Interval(self.interval_combo.currentText())
+        return setting
 
 class BacktesterChart(pg.GraphicsLayoutWidget):
     """"""
@@ -1284,7 +1414,7 @@ class CandleChartDialog(QtWidgets.QDialog):
 
         self.price_range = self.high_price - self.low_price
 
-    def update_trades(self, trades: list) -> None:
+    def update_trades(self, trades: list, window:int,interval:Interval) -> None:
         """"""
         trade_pairs: list = generate_trade_pairs(trades)
 
@@ -1295,6 +1425,19 @@ class CandleChartDialog(QtWidgets.QDialog):
         y_adjustment: float = self.price_range * 0.001
 
         for d in trade_pairs:
+            if interval == Interval.MINUTE:
+                minute = d["open_dt"].minute - d["open_dt"].minute % window
+                d["open_dt"] = d["open_dt"].replace(minute = minute,second=0, microsecond=0)
+
+                minute = d["close_dt"].minute - d["close_dt"].minute % window
+                d["close_dt"] = d["close_dt"].replace(minute = minute,second=0, microsecond=0)
+            elif interval == Interval.HOUR:
+                hour = d["open_dt"].hour - d["open_dt"].hour % window
+                d["open_dt"] = d["open_dt"].replace(huor=hour,minute=0,second=0, microsecond=0)
+
+                hour = d["close_dt"].hour - d["close_dt"].hour % window
+                d["close_dt"] = d["close_dt"].replace(huor=hour,minute=0,second=0, microsecond=0)
+
             open_ix = self.dt_ix_map[d["open_dt"]]
             close_ix = self.dt_ix_map[d["close_dt"]]
             open_price = d["open_price"]
@@ -1398,6 +1541,67 @@ class CandleChartDialog(QtWidgets.QDialog):
         """"""
         return self.updated
 
+def generate_window_bar(history:list,window:int,interval:Interval ) ->list:
+    bar_list = []
+    window_bar = None
+    interval_count = 0
+    for bar in  history:
+        if not window_bar:
+            # Generate timestamp for bar data
+            if interval == Interval.MINUTE:
+                dt = bar.datetime.replace(second=0, microsecond=0)
+            else:
+                dt = bar.datetime.replace(minute=0, second=0, microsecond=0)
+
+            window_bar =BarData(
+                symbol=bar.symbol,
+                exchange=bar.exchange,
+                datetime=dt,
+                gateway_name=bar.gateway_name,
+                open_price=bar.open_price,
+                high_price=bar.high_price,
+                low_price=bar.low_price
+            )
+        # Otherwise, update high/low price into window bar
+        else:
+            window_bar.high_price = max(
+                window_bar.high_price, bar.high_price)
+            window_bar.low_price = min(
+                window_bar.low_price, bar.low_price)
+
+        # Update close price/volume into window bar
+        window_bar.close_price = bar.close_price
+        window_bar.volume += int(bar.volume)
+        window_bar.open_interest = bar.open_interest
+
+        # Check if window bar completed
+        finished = False
+
+        if interval == Interval.MINUTE:
+            # x-minute bar
+            if not (bar.datetime.minute + 1) % window:
+                finished = True
+        elif interval == Interval.HOUR:
+            if last_bar and bar.datetime.hour != last_bar.datetime.hour:
+                # 1-hour bar
+                if window == 1:
+                    finished = True
+                # x-hour bar
+                else:
+                    interval_count += 1
+
+                    if not interval_count % window:
+                        finished = True
+                        interval_count = 0
+
+        if finished:
+            bar_list.append(window_bar)
+            window_bar = None
+
+        # Cache last bar object
+        last_bar = bar
+
+    return bar_list
 
 def generate_trade_pairs(trades: list) -> list:
     """"""
